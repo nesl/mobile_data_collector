@@ -99,12 +99,3 @@ cd ../android-app
 
 The Python tests do not require a broker. Android builds need dependency access
 the first time Gradle runs.
-
-## Repository hygiene
-
-Generated APK/AAB files, Gradle output, Python virtual environments and caches,
-IDE state, local SDK paths, `.env` files, and signing keys are ignored. The
-Gradle wrapper JAR and TensorFlow Lite files in `app/src/main/assets` are source
-inputs and should remain versioned. The repository is about 20 MB, with roughly
-19 MB of required model assets, so it is comfortably below GitHub's per-file
-and repository-size limits.
