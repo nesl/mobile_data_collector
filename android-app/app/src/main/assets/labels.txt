@@ -1,0 +1,14 @@
+person
+barrier
+barrel
+case
+czech-hedgehog
+robot
+vehicle
+object
+cone
+door
+window
+building
+stairs
+pole

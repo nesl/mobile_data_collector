@@ -1,0 +1,6 @@
+* text=auto
+*.bat text eol=crlf
+gradlew text eol=lf
+*.tflite binary
+*.jar binary
+*.webp binary

@@ -1,0 +1,39 @@
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+local.properties
+*.jks
+*.keystore
+keystore.properties
+
+# Android / Gradle output
+.gradle/
+**/build/
+*.apk
+*.aab
+*.ap_
+*.dex
+*.hprof
+.cxx/
+.externalNativeBuild/
+captures/
+
+# Python output and environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# IDE and operating-system files
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+*~

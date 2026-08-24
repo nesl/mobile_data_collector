@@ -1,0 +1,2 @@
+# Module build output is ignored by the repository-level .gitignore.
+/build/
