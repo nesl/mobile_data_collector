@@ -55,35 +55,17 @@ python3 -m venv .venv
 pip install -r requirements.txt
 ```
 
-### 2. Build and install the Android app
+### 2. Install the released Android app
 
-Create `android-app/local.properties` using Android Studio, then build the APK:
+Open the project's [GitHub Releases
+page](https://github.com/nesl/mobile_data_collector/releases), select the latest
+release, and download its `app-debug.apk` asset. You can download it directly on
+the phone, or download it on a computer and copy it to the phone using USB, file
+sharing, or cloud storage.
 
-```bash
-cd android-app
-./gradlew assembleDebug
-```
-
-The resulting file is normally:
-
-```text
-android-app/app/build/outputs/apk/debug/app-debug.apk
-```
-
-The APK is a generated, Git-ignored artifact and may not exist in a fresh clone
-until it is built. Tagged GitHub versions build it automatically and attach it
-as `app-debug.apk` on the project's
-[Releases page](https://github.com/nesl/mobile_data_collector/releases). A
-manually dispatched **Build Android APK** workflow also provides it as a GitHub
-Actions artifact. Install it using either method:
-
-- Copy `app-debug.apk` to the phone using USB, file sharing, or cloud storage;
-  open it on the phone and permit installation from that source when prompted.
-- Enable USB debugging and install directly from the repository root:
-
-  ```bash
-  adb install -r android-app/app/build/outputs/apk/debug/app-debug.apk
-  ```
+Open `app-debug.apk` on the phone and permit installation from that source when
+Android prompts you. If an older debug build was signed with a different key,
+Android may require you to uninstall that build first.
 
 Grant camera and microphone permissions when the app starts. Installation is a
 one-time operation unless the app changes.
@@ -194,6 +176,37 @@ MQTT_CONTROL_TOPIC=ucla/ce_controller
 For an Android emulator, use `10.0.2.2` to reach the host computer. The detector
 also accepts `--host`, `--port`, `--topic`, and `--visualization-url`; run
 `python -m runtime.detector --help` for the complete CLI.
+
+## Build and install the Android app from source
+
+Building locally is optional; normal deployments should use the APK from the
+[Releases page](https://github.com/nesl/mobile_data_collector/releases).
+
+Create `android-app/local.properties` using Android Studio, then build with JDK
+17:
+
+```bash
+cd android-app
+./gradlew assembleDebug
+```
+
+The generated, Git-ignored APK is:
+
+```text
+android-app/app/build/outputs/apk/debug/app-debug.apk
+```
+
+Copy that file to the phone and open it, or enable USB debugging and install it
+from the repository root:
+
+```bash
+adb install -r android-app/app/build/outputs/apk/debug/app-debug.apk
+```
+
+Tagged versions build the same APK using GitHub Actions and attach it to the
+corresponding GitHub Release. A manually dispatched **Build Android APK**
+workflow also makes it available as a workflow artifact without creating a
+release.
 
 ## Tests
 
