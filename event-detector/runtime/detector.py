@@ -6,10 +6,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import time
 from urllib import error, request
 
 from .fsm import Observation
 from language import compile_event, load_event
+from services.persistence import MongoStore
 
 
 class VisualizationClient:
@@ -108,6 +110,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--password", default=os.getenv("MQTT_PASSWORD"))
     parser.add_argument("--min-confidence", type=float, default=float(os.getenv("CE_MIN_CONFIDENCE", "0")))
     parser.add_argument("--visualization-url", default=os.getenv("CE_VISUALIZATION_URL", "http://localhost:5000"))
+    parser.add_argument("--session", default=os.getenv("CE_SESSION", "default"), help="persistence session name")
+    parser.add_argument("--mongodb-uri", default=os.getenv("MONGODB_URI", "mongodb://localhost:27017"))
+    parser.add_argument("--mongodb-database", default=os.getenv("MONGODB_DATABASE", "iobt_db"))
+    parser.add_argument("--mongodb-collection", default=os.getenv("MONGODB_COLLECTION", "event_history"))
     return parser.parse_args()
 
 
@@ -117,6 +123,7 @@ def main() -> None:
 
     detector = compile_event(load_event(args.definition))
     visualization = VisualizationClient(args.visualization_url)
+    history = MongoStore(args.mongodb_uri, args.mongodb_database, args.mongodb_collection) if args.mongodb_uri else None
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     if args.username:
         client.username_pw_set(args.username, args.password)
@@ -128,8 +135,19 @@ def main() -> None:
             f"Compiled {detector.complex_event_name} from {args.definition}; "
             f"listening on {args.host}:{args.port}/{args.topic}"
         )
+        if history is not None:
+            history.save("detector_start", {
+                "session": args.session,
+                "event_name": detector.complex_event_name,
+                "definition": args.definition,
+                "topic": args.topic,
+                "fsm": detector.status(),
+            }, time.time())
         client.subscribe(args.topic)
         visualization.update({
+            "session": args.session,
+            "event_name": detector.complex_event_name,
+            "definition": args.definition,
             "topic": args.topic,
             "completed": False,
             "fsm": detector.status(),
@@ -150,8 +168,12 @@ def main() -> None:
                     completed = True
                     print(json.dumps({"complex_event": detector.complex_event_name, "device": observation.device}))
             if observations:
-                visualization.update({
+                update = {
+                    "session": args.session,
+                    "event_name": detector.complex_event_name,
+                    "definition": args.definition,
                     "topic": message.topic,
+                    "raw_payload": message.payload.decode("utf-8", errors="replace"),
                     "completed": completed,
                     "fsm": detector.status(),
                     "observations": [
@@ -164,7 +186,10 @@ def main() -> None:
                         }
                         for item in observations
                     ],
-                })
+                }
+                if history is not None:
+                    history.save("detector_update", update, time.time())
+                visualization.update(update)
         except (UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
             print(f"Ignored malformed message: {error}")
 

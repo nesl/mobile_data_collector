@@ -1,4 +1,17 @@
 services:
+  mongodb:
+    image: mongo:8.0
+    ports:
+      - "127.0.0.1:27017:27017"
+    volumes:
+      - mongodb-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
   mqtt:
     image: eclipse-mosquitto:2
     ports:
@@ -13,6 +26,14 @@ services:
     command: python -m services.visualization --host 0.0.0.0
     ports:
       - "5000:5000"
+    environment:
+      MONGODB_URI: mongodb://mongodb:27017
+      MONGODB_DATABASE: iobt_db
+      MONGODB_COLLECTION: event_history
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    restart: unless-stopped
 
   registry:
     build:
@@ -30,3 +51,4 @@ services:
 
 volumes:
   registry-data:
+  mongodb-data:

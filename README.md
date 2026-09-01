@@ -7,13 +7,15 @@ YAML complex-event (CE) definition, consumes those observations, and reports CE
 progress to a web visualization.
 
 ```text
-Android phones ── observations ──> MQTT ──> detector process
-Android phones <── start/stop ──── MQTT <── controller (optional)
-                                      │
-                                      └────> visualization
+Android phones ── observations ──> MQTT ──> detector ──> MongoDB
+Android phones <── start/stop ──── MQTT <── controller     │
+                                             detector ──> visualization
+                                                            │
+                                              MongoDB ───────┘ (history reads)
 ```
 
-Docker runs the long-lived MQTT broker, device registry, and visualization. The
+Docker runs the long-lived MQTT broker, MongoDB event history, device registry,
+and visualization. The
 detector is a separate Python process, so each invocation can run a different
 CE without rebuilding or restarting the Docker services.
 
@@ -105,7 +107,7 @@ From the repository root:
 docker compose up --build
 ```
 
-This starts MQTT, the device registry, and the visualization. Open
+This starts MQTT, MongoDB, the device registry, and the visualization. Open
 <http://localhost:5000> on the laptop. These services can remain running across
 multiple CE runs.
 
@@ -113,7 +115,7 @@ Useful checks are:
 
 ```bash
 docker compose ps
-docker compose logs -f registry mqtt
+docker compose logs -f registry mqtt mongodb visualization
 ```
 
 ### 4. Start one CE detector
@@ -123,7 +125,7 @@ In another terminal:
 ```bash
 cd event-detector
 . .venv/bin/activate
-python -m runtime.detector ../ce_definitions/iobt_ce3.yaml
+python -m runtime.detector ../ce_definitions/iobt_ce3.yaml --session field-test-01
 ```
 
 The detector parses, validates, and compiles the supplied YAML before connecting
@@ -133,6 +135,35 @@ separate definition-check command is required.
 One detector process represents one CE instance. After completion, stop it with
 Ctrl-C and run the command again—with the same or another YAML file—to start a
 fresh instance. The Docker services do not need to be restarted.
+
+### Persistent event history
+
+The CE detector saves every MQTT update directly to MongoDB, including
+the session name, CE name and definition, MQTT topic, raw mobile payload,
+normalized observations, FSM state, completion status, and detector receipt
+time. The visualization only receives live display updates and reads stored
+history; it never proxies event-history writes. MongoDB data survives
+`docker compose down` in the `mongodb-data` volume.
+
+Use a distinct `--session` value for each deployment or recording run. History
+is available as newest-first JSON through the visualization service:
+
+```bash
+curl 'http://localhost:5000/api/history?session=field-test-01&limit=100'
+```
+
+The limit is capped at 500. MongoDB is published on laptop loopback only at
+`mongodb://localhost:27017`, allowing the host-run detector to write without
+exposing the database to the LAN. Containers reach it at
+`mongodb://mongodb:27017`. For direct administration, use:
+
+```bash
+docker compose exec mongodb mongosh iobt_db
+```
+
+The database is `iobt_db` and the collection is `event_history`. The detector
+continues live processing if MongoDB is temporarily unavailable and retries on
+later writes. Updates received during an outage are not backfilled.
 
 ### 5. Begin collecting observations
 
@@ -174,7 +205,8 @@ MQTT_CONTROL_TOPIC=ucla/ce_controller
 ```
 
 For an Android emulator, use `10.0.2.2` to reach the host computer. The detector
-also accepts `--host`, `--port`, `--topic`, and `--visualization-url`; run
+also accepts `--host`, `--port`, `--topic`, `--session`, `--mongodb-uri`, and
+`--visualization-url`; run
 `python -m runtime.detector --help` for the complete CLI.
 
 ## Build and install the Android app from source
