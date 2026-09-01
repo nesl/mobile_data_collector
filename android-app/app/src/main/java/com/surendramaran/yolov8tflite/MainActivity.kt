@@ -4,6 +4,7 @@ import android.Manifest
 import android.R
 import android.annotation.SuppressLint
 import android.content.ContentValues
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Matrix
@@ -32,6 +33,8 @@ import com.surendramaran.yolov8tflite.Constants.MODEL_PATH
 import com.surendramaran.yolov8tflite.databinding.ActivityMainBinding
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
@@ -80,9 +83,13 @@ class MainActivity : AppCompatActivity(), ResultAggregator.BundledResultListener
 
     // Bundling service
     private lateinit var aggregator: ResultAggregator
+    private val detectionFilter = ConsecutiveDetectionFilter(YOLO_REQUIRED_FRAMES)
 
     //MQTT client
     var mymqttclient: MyMQTTClient? = null
+    private val settingsLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        if (it.resultCode == RESULT_OK) connectMqtt()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -96,14 +103,18 @@ class MainActivity : AppCompatActivity(), ResultAggregator.BundledResultListener
         }
 
         // Set up result bundling
-        aggregator = ResultAggregator(3000, this, binding.idText.text.toString())
+        val initialDeviceId = AppSettings.deviceId(this).ifBlank { "phone-${AppSettings.installId(this).take(8)}" }
+        binding.idText.setText(initialDeviceId)
+        aggregator = ResultAggregator(3000, this, initialDeviceId)
 
         // Also set up the audio classifier
         audioClassifierHelper = AudioClassifierHelper(
             context = this,
-            classificationThreshold = 0.05f,
+            // Keep low-ranked per-window candidates; the CE detector applies
+            // its own gunshot threshold across the stream of overlapping windows.
+            classificationThreshold = 0.01f,
             overlap = 2,
-            numOfResults = 10,
+            numOfResults = 25,
             runningMode = RunningMode.AUDIO_STREAM,  // or AUDIO_CLIPS
             listener = this,  // implements ClassifierListener
             model_path = "yamnet.tflite", // your model file name (must be in assets)
@@ -125,17 +136,47 @@ class MainActivity : AppCompatActivity(), ResultAggregator.BundledResultListener
             ActivityCompat.requestPermissions(this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS)
         }
 
-        bindListeners()
+        // bindListeners()
         // Start the MQTT
         Log.d(log_tag, "Starting MQTT client")
 
 
-        mymqttclient = MyMQTTClient.getInstance()
-        if (mymqttclient?.connect_mqtt() == true) {
-            binding.mqttStatus.text = "mqtt: on"
+        connectMqtt()
+
+        binding.settingsButton.setOnClickListener {
+            settingsLauncher.launch(Intent(this, SettingsActivity::class.java))
         }
-        mymqttclient?.subscribe(mqtt_recv_topic)
-        MyMQTTClient.mqttAndroidClient.setCallback(object : MqttCallback {
+
+        binding.sendbutton.setOnClickListener {
+            val chosenId = binding.idText.text.toString().trim()
+            if (chosenId.isNotEmpty() && chosenId != AppSettings.deviceId(this)) {
+                AppSettings.save(this, AppSettings.host(this), AppSettings.port(this), chosenId)
+                aggregator.setDeviceId(chosenId)
+                registerDevice()
+            }
+            if(!record_data!!) {
+                record_data = true
+                startWindowedRecording()
+            }
+            else {
+                stopRecording()
+                record_data = false
+                rectask?.cancel(false)
+                if (::recexecutor.isInitialized) recexecutor.shutdown()
+            }
+        }
+    }
+
+    private fun connectMqtt() {
+        val client = MyMQTTClient.getInstance()
+        mymqttclient = client
+        client.configure(AppSettings.host(this), AppSettings.port(this))
+        val connected = client.connect_mqtt()
+        binding.mqttStatus.text = if (connected) "mqtt: on" else "mqtt: off"
+        val responseTopic = "ucla/ce_registry/response/${AppSettings.installId(this)}"
+        client.subscribe(mqtt_recv_topic)
+        client.subscribe(responseTopic)
+        MyMQTTClient.mqttAndroidClient?.setCallback(object : MqttCallback {
             override fun connectionLost(cause: Throwable) {
                 Log.d(log_tag, "Connection lost...")
                 binding.mqttStatus.text = "mqtt: off"
@@ -147,7 +188,14 @@ class MainActivity : AppCompatActivity(), ResultAggregator.BundledResultListener
             override fun messageArrived(topic: String, message: MqttMessage) {
                 val payload = String(message.payload)
                 Log.d(log_tag, "Received message: $payload")
-                if (payload.contains("handshake")) {
+                if (topic == responseTopic) {
+                    val assignedId = Json.parseToJsonElement(payload).jsonObject["device_id"]?.jsonPrimitive?.content
+                    if (!assignedId.isNullOrBlank()) {
+                        AppSettings.saveAssignedId(this@MainActivity, assignedId)
+                        aggregator.setDeviceId(assignedId)
+                        runOnUiThread { binding.idText.setText(assignedId) }
+                    }
+                } else if (payload.contains("handshake")) {
 
                     // Get controller and local timestamp
                     controller_ts = payload.split(":")[1].toLong()
@@ -180,39 +228,32 @@ class MainActivity : AppCompatActivity(), ResultAggregator.BundledResultListener
             }
 
         })
-
-        binding.sendbutton.setOnClickListener {
-            // Call the function you want to execute on button press
-            // mymqttclient?.publish("Hello from android!")
-            if(!record_data!!) {  // Data not being recorded, start recording
-                record_data = true
-                startWindowedRecording()
-            }
-            else {
-                stopRecording()
-                record_data = false
-                rectask?.cancel(false)
-                recexecutor.shutdown()
-            }
-        }
-
+        if (connected) registerDevice()
     }
 
-    private fun bindListeners() {
-        binding.apply {
-            isGpu.setOnCheckedChangeListener { buttonView, isChecked ->
-                cameraExecutor.submit {
-                    detector?.restart(isGpu = isChecked)
-                }
-                if (isChecked) {
-                    buttonView.setBackgroundColor(ContextCompat.getColor(baseContext, R.color.holo_orange_dark))
-                } else {
-                    buttonView.setBackgroundColor(ContextCompat.getColor(baseContext, R.color.darker_gray))
-                }
-            }
+    private fun registerDevice() {
+        val request = buildJsonObject {
+            put("install_id", AppSettings.installId(this@MainActivity))
+            put("preferred_id", AppSettings.deviceId(this@MainActivity))
         }
-
+        mymqttclient?.publish("ucla/ce_registry/request", request.toString())
     }
+
+//    private fun bindListeners() {
+//        binding.apply {
+//            isGpu.setOnCheckedChangeListener { buttonView, isChecked ->
+//                cameraExecutor.submit {
+//                    detector?.restart(isGpu = isChecked)
+//                }
+//                if (isChecked) {
+//                    buttonView.setBackgroundColor(ContextCompat.getColor(baseContext, R.color.holo_orange_dark))
+//                } else {
+//                    buttonView.setBackgroundColor(ContextCompat.getColor(baseContext, R.color.darker_gray))
+//                }
+//            }
+//        }
+
+//    }
 
     private fun startCamera() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
@@ -355,6 +396,7 @@ class MainActivity : AppCompatActivity(), ResultAggregator.BundledResultListener
     companion object {
         private const val TAG = "Camera"
         private const val REQUEST_CODE_PERMISSIONS = 10
+        private const val YOLO_REQUIRED_FRAMES = 3
         private val REQUIRED_PERMISSIONS = mutableListOf (
             Manifest.permission.CAMERA,
             Manifest.permission.RECORD_AUDIO
@@ -364,6 +406,9 @@ class MainActivity : AppCompatActivity(), ResultAggregator.BundledResultListener
     override fun onEmptyDetect() {
         runOnUiThread {
             binding.overlay.clear()
+            detectionFilter.filter(emptyList())
+            // Distinguish an empty frame from a disconnected or silent phone.
+            aggregator.addDetectionResult(create_outmessage(emptyList()))
         }
     }
 
@@ -378,7 +423,8 @@ class MainActivity : AppCompatActivity(), ResultAggregator.BundledResultListener
 //                    mymqttclient?.publish("detection::"+create_outmessage(boundingBoxes))
 //                }
 
-                val data_message = create_outmessage(boundingBoxes)
+                val stableBoundingBoxes = detectionFilter.filter(boundingBoxes)
+                val data_message = create_outmessage(stableBoundingBoxes)
                 // Save to bundle
                 aggregator.addDetectionResult(data_message)
 

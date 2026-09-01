@@ -15,7 +15,7 @@ android {
         versionCode = 1
         versionName = "1.0"
 
-        val mqttHost = providers.gradleProperty("MQTT_HOST").orElse("10.0.2.2").get()
+        val mqttHost = providers.gradleProperty("MQTT_HOST").orElse("").get()
         val mqttPort = providers.gradleProperty("MQTT_PORT").orElse("1883").get()
         val mqttPublishTopic = providers.gradleProperty("MQTT_PUBLISH_TOPIC").orElse("ucla/ce_mobile").get()
         val mqttControlTopic = providers.gradleProperty("MQTT_CONTROL_TOPIC").orElse("ucla/ce_controller").get()

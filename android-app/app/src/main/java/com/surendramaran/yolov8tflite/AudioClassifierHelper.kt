@@ -30,6 +30,10 @@ import com.google.mediapipe.tasks.components.containers.AudioData
 import com.google.mediapipe.tasks.components.containers.AudioData.AudioDataFormat
 import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.core.Delegate
+import java.io.File
+import java.io.FileOutputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
@@ -46,6 +50,10 @@ class AudioClassifierHelper(
     private var recorder: AudioRecord? = null
     private var executor: ScheduledThreadPoolExecutor? = null
     private var audioClassifier: AudioClassifier? = null
+    private val liveRingBuffer = FloatArray(REQUIRE_INPUT_BUFFER_SIZE)
+    private var liveRingWritePosition = 0
+    private var liveRingFillCount = 0
+    private var captureSequence = 0L
     private val classifyRunnable = Runnable {
         recorder?.let { classifyAudioAsync(it) }
     }
@@ -84,10 +92,18 @@ class AudioClassifierHelper(
                 AudioClassifier.createFromOptions(context, options)
             if (runningMode == RunningMode.AUDIO_STREAM) {
 
-                recorder = audioClassifier!!.createAudioRecord(
-                    AudioFormat.CHANNEL_IN_DEFAULT,
+                val minimumBufferSize = AudioRecord.getMinBufferSize(
                     SAMPLING_RATE_IN_HZ,
-                    BUFFER_SIZE_IN_BYTES.toInt())
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_FLOAT
+                )
+                recorder = AudioRecord(
+                    MediaRecorder.AudioSource.DEFAULT,
+                    SAMPLING_RATE_IN_HZ,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_FLOAT,
+                    maxOf(minimumBufferSize, BUFFER_SIZE_IN_BYTES.toInt())
+                )
 
                 startAudioClassification()
             }
@@ -118,31 +134,68 @@ class AudioClassifierHelper(
         recorder?.startRecording()
         executor = ScheduledThreadPoolExecutor(1)
 
-        // Each model will expect a specific audio recording length. This formula calculates that
-        // length using the input buffer size and tensor format sample rate.
-        // For example, YAMNET expects 0.975 second length recordings.
-        // This needs to be in milliseconds to avoid the required Long value dropping decimals.
-        val lengthInMilliSeconds =
-            ((REQUIRE_INPUT_BUFFER_SIZE * 1.0f) / SAMPLING_RATE_IN_HZ) * 1000
-
-        val interval = (lengthInMilliSeconds * (1 - (overlap * 0.25))).toLong()
-
         executor?.scheduleAtFixedRate(
             classifyRunnable,
             0,
-            interval,
+            HOP_MILLISECONDS,
             TimeUnit.MILLISECONDS
         )
     }
 
     private fun classifyAudioAsync(audioRecord: AudioRecord) {
-        val audioData = AudioData.create(
-            AudioDataFormat.create(recorder!!.getFormat()),  /* sampleCounts= */SAMPLING_RATE_IN_HZ
-        )
-        audioData.load(audioRecord)
+        val hop = FloatArray(HOP_INPUT_BUFFER_SIZE)
+        val readSamples = audioRecord.read(hop, 0, hop.size, AudioRecord.READ_BLOCKING)
+        if (readSamples <= 0) {
+            Log.w(TAG, "AudioRecord returned $readSamples samples")
+            return
+        }
 
-        val inferenceTime = SystemClock.uptimeMillis()
-        audioClassifier?.classifyAsync(audioData, inferenceTime)
+        for (index in 0 until readSamples) {
+            liveRingBuffer[liveRingWritePosition] = hop[index]
+            liveRingWritePosition = (liveRingWritePosition + 1) % liveRingBuffer.size
+            if (liveRingFillCount < liveRingBuffer.size) liveRingFillCount++
+        }
+        if (liveRingFillCount < liveRingBuffer.size) return
+
+        val window = FloatArray(REQUIRE_INPUT_BUFFER_SIZE)
+        for (index in window.indices) {
+            window[index] = liveRingBuffer[(liveRingWritePosition + index) % liveRingBuffer.size]
+        }
+        val audioData = AudioData.create(
+            AudioDataFormat.create(audioRecord.format),
+            REQUIRE_INPUT_BUFFER_SIZE
+        )
+        audioData.load(window)
+
+        val timestamp = SystemClock.uptimeMillis()
+        captureDebugWindow(window, timestamp)
+        audioClassifier?.classifyAsync(audioData, timestamp)
+    }
+
+    private fun captureDebugWindow(samples: FloatArray, timestamp: Long) {
+        if (!BuildConfig.DEBUG) return
+
+        try {
+            val captureDirectory = File(context.filesDir, CAPTURE_DIRECTORY).apply { mkdirs() }
+            val slot = captureSequence % MAX_CAPTURE_WINDOWS
+            val audioFile = File(captureDirectory, "window_%03d.f32le".format(slot))
+            val bytes = ByteBuffer.allocate(samples.size * Float.SIZE_BYTES)
+                .order(ByteOrder.LITTLE_ENDIAN)
+            samples.forEach(bytes::putFloat)
+            FileOutputStream(audioFile, false).use { it.write(bytes.array()) }
+
+            val peak = samples.maxOf { kotlin.math.abs(it) }
+            val rms = kotlin.math.sqrt(samples.sumOf { (it * it).toDouble() } / samples.size)
+            File(captureDirectory, "window_%03d.txt".format(slot)).writeText(
+                "sequence=$captureSequence\ntimestamp_ms=$timestamp\npeak=$peak\nrms=$rms\n"
+            )
+            if (captureSequence == 0L) {
+                Log.i(TAG, "Capturing the latest $MAX_CAPTURE_WINDOWS YAMNet windows in ${captureDirectory.absolutePath}")
+            }
+            captureSequence++
+        } catch (error: Exception) {
+            Log.e(TAG, "Unable to capture YAMNet input window", error)
+        }
     }
 
     fun classifyAudio(audioData: AudioData): ResultBundle? {
@@ -199,8 +252,11 @@ class AudioClassifierHelper(
         private const val SAMPLING_RATE_IN_HZ = 16000
         private const val BUFFER_SIZE_FACTOR: Int = 2
         const val EXPECTED_INPUT_LENGTH = 0.975F
-        private const val REQUIRE_INPUT_BUFFER_SIZE =
-            SAMPLING_RATE_IN_HZ * EXPECTED_INPUT_LENGTH
+        private const val REQUIRE_INPUT_BUFFER_SIZE = 15_600
+        private const val HOP_INPUT_BUFFER_SIZE = REQUIRE_INPUT_BUFFER_SIZE / 2
+        private const val HOP_MILLISECONDS = 488L
+        private const val CAPTURE_DIRECTORY = "yamnet_capture"
+        private const val MAX_CAPTURE_WINDOWS = 120
 
         /**
          * Size of the buffer where the audio data is stored by Android

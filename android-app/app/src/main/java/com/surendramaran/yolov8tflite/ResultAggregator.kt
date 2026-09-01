@@ -14,6 +14,10 @@ class ResultAggregator(
     private var lastFlushTime = System.currentTimeMillis()
     private var curr_dev_id = dev_id
 
+    fun setDeviceId(deviceId: String) {
+        synchronized(lock) { curr_dev_id = deviceId }
+    }
+
     fun addAudioResult(result: AudWrapper) {
         synchronized(lock) {
             audioBuffer.add(result)
