@@ -1,7 +1,7 @@
 import tempfile
 import unittest
 
-from registry import RegistryStore
+from services.registry import RegistryStore
 
 
 class RegistryTests(unittest.TestCase):
@@ -11,7 +11,8 @@ class RegistryTests(unittest.TestCase):
             self.assertEqual(store.assign("a"), "phone-1")
             self.assertEqual(store.assign("a"), "phone-1")
             self.assertEqual(store.assign("b", "outside"), "outside")
-            self.assertEqual(store.assign("c", "outside"), "outside-2")
+            with self.assertRaisesRegex(ValueError, "already assigned"):
+                store.assign("c", "outside")
 
     def test_preferred_id_is_sanitized(self):
         with tempfile.NamedTemporaryFile() as database:

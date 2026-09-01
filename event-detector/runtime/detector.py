@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
-"""Detect complex events in bundled mobile YOLO and YAMNet results."""
+"""Run compiled complex events over bundled mobile YOLO and YAMNet results."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import os
-import time
-from dataclasses import dataclass
 from urllib import error, request
 
-from definitions import EVENT_NAMES, build_event
-from fsm import Observation
+from .fsm import Observation
+from language import compile_event, load_event
 
 
 class VisualizationClient:
@@ -97,48 +95,27 @@ def labels_from_payload(payload: bytes) -> tuple[str, list[str]]:
     return observations[0].device, [label for item in observations for label in item.labels]
 
 
-@dataclass
-class SequenceDetector:
-    """Compatibility helper retained for users of the original detector module."""
-
-    first: str
-    second: str
-    within_seconds: float
-    first_seen_at: float | None = None
-
-    def observe(self, labels: list[str], now: float | None = None) -> bool:
-        now = time.monotonic() if now is None else now
-        normalized = {label.casefold() for label in labels}
-        if self.first_seen_at is not None and now - self.first_seen_at > self.within_seconds:
-            self.first_seen_at = None
-        if self.first.casefold() in normalized:
-            self.first_seen_at = now
-        if self.first_seen_at is not None and self.second.casefold() in normalized:
-            self.first_seen_at = None
-            return True
-        return False
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "definition",
+        help="path to the YAML complex-event definition to parse and compile",
+    )
     parser.add_argument("--host", default=os.getenv("MQTT_HOST", "localhost"))
     parser.add_argument("--port", type=int, default=int(os.getenv("MQTT_PORT", "1883")))
     parser.add_argument("--topic", default=os.getenv("MQTT_TOPIC", "ucla/ce_mobile"))
     parser.add_argument("--username", default=os.getenv("MQTT_USERNAME"))
     parser.add_argument("--password", default=os.getenv("MQTT_PASSWORD"))
-    parser.add_argument("--event", choices=EVENT_NAMES, default="iobt_ce3")
-    parser.add_argument("--outside-device", default=os.getenv("CE_OUTSIDE_DEVICE", "phone-1"))
-    parser.add_argument("--building-device", default=os.getenv("CE_BUILDING_DEVICE", "phone-2"))
     parser.add_argument("--min-confidence", type=float, default=float(os.getenv("CE_MIN_CONFIDENCE", "0")))
     parser.add_argument("--visualization-url", default=os.getenv("CE_VISUALIZATION_URL", "http://localhost:5000"))
     return parser.parse_args()
 
 
 def main() -> None:
+    args = parse_args()
     import paho.mqtt.client as mqtt
 
-    args = parse_args()
-    detector = build_event(args.event, args.outside_device, args.building_device)
+    detector = compile_event(load_event(args.definition))
     visualization = VisualizationClient(args.visualization_url)
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     if args.username:
@@ -147,7 +124,10 @@ def main() -> None:
     def on_connect(client, _userdata, _flags, reason_code, _properties):
         if reason_code != 0:
             raise RuntimeError(f"MQTT connection failed: {reason_code}")
-        print(f"Listening on {args.host}:{args.port}/{args.topic} for {args.event}")
+        print(
+            f"Compiled {detector.complex_event_name} from {args.definition}; "
+            f"listening on {args.host}:{args.port}/{args.topic}"
+        )
         client.subscribe(args.topic)
         visualization.update({
             "topic": args.topic,
@@ -168,7 +148,7 @@ def main() -> None:
                 }))
                 if detector.observe(observation):
                     completed = True
-                    print(json.dumps({"complex_event": detector.name, "device": observation.device}))
+                    print(json.dumps({"complex_event": detector.complex_event_name, "device": observation.device}))
             if observations:
                 visualization.update({
                     "topic": message.topic,

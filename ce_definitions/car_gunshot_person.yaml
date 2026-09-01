@@ -1,0 +1,29 @@
+version: 1
+complex_event_name: car_gunshot_person
+description: A vehicle appears, a gunshot is heard, then a person appears.
+
+devices:
+  OUTSIDE: outside_phone
+  BUILDING: building_phone
+
+atomic_events:
+  - atomic_event_name: vehicle_detected
+    triggers:
+      - device: OUTSIDE
+        label: vehicle
+
+  - atomic_event_name: gunshot_heard
+    triggers:
+      - device: BUILDING
+        label: gunshot
+        confidence: ">= 0.08"
+
+  - atomic_event_name: person_detected
+    triggers:
+      - device: OUTSIDE
+        label: person
+
+ce_sequence:
+  - vehicle_detected
+  - gunshot_heard
+  - person_detected

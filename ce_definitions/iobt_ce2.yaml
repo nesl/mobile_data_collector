@@ -1,0 +1,63 @@
+version: 1
+complex_event_name: iobt_ce2
+description: A car repeatedly appears and disappears three times.
+
+devices:
+  OUTSIDE: outside_phone
+
+atomic_events:
+  - atomic_event_name: car_detected_1
+    triggers:
+      - device: OUTSIDE
+        label: car
+  - atomic_event_name: vehicles_gone_1
+    triggers:
+      - device: OUTSIDE
+        label: vehicle
+        count: "== 0"
+  - atomic_event_name: car_detected_2
+    triggers:
+      - device: OUTSIDE
+        label: car
+  - atomic_event_name: vehicles_gone_2
+    triggers:
+      - device: OUTSIDE
+        label: vehicle
+        count: "== 0"
+  - atomic_event_name: car_detected_3
+    triggers:
+      - device: OUTSIDE
+        label: car
+  - atomic_event_name: vehicles_gone_3
+    triggers:
+      - device: OUTSIDE
+        label: vehicle
+        count: "== 0"
+
+ce_sequence:
+  - car_detected_1
+  - vehicles_gone_1
+  - car_detected_2
+  - vehicles_gone_2
+  - car_detected_3
+  - vehicles_gone_3
+
+constraints:
+  - holds:
+      atomic_event: car_detected_1
+      duration: 3s
+  - holds:
+      atomic_event: vehicles_gone_1
+      duration: 4s
+  - holds:
+      atomic_event: car_detected_2
+      duration: 3s
+  - holds:
+      atomic_event: vehicles_gone_2
+      duration: 4s
+  - holds:
+      atomic_event: car_detected_3
+      duration: 3s
+  - holds:
+      atomic_event: vehicles_gone_3
+      duration: 4s

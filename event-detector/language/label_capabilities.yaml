@@ -1,0 +1,23 @@
+version: 1
+
+labels:
+  person:
+    source: vision
+    native_labels: [person]
+    fields: [count, confidence]
+  car:
+    source: vision
+    native_labels: [car]
+    fields: [count, confidence]
+  truck:
+    source: vision
+    native_labels: [truck]
+    fields: [count, confidence]
+  vehicle:
+    source: vision
+    native_labels: [car, truck, bus, motorcycle]
+    fields: [count, confidence]
+  gunshot:
+    source: audio
+    contains: [gunshot, gunfire, machine gun, artillery fire]
+    fields: [count, confidence]

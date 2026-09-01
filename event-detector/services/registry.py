@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Assign stable, human-friendly device IDs over MQTT."""
 
+import argparse
 import json
 import os
 import re
@@ -28,10 +29,9 @@ class RegistryStore:
         if candidate:
             owner = self.db.execute("SELECT install_id FROM devices WHERE device_id=?", (candidate,)).fetchone()
             if owner and owner[0] != install_id:
-                base, suffix = candidate, 2
-                while self.db.execute("SELECT 1 FROM devices WHERE device_id=?", (f"{base}-{suffix}",)).fetchone():
-                    suffix += 1
-                candidate = f"{base}-{suffix}"
+                if preferred_id:
+                    raise ValueError(f"requested device name {candidate!r} is already assigned")
+                candidate = None
         if not candidate:
             number = 1
             while self.db.execute("SELECT 1 FROM devices WHERE device_id=?", (f"phone-{number}",)).fetchone():
@@ -55,10 +55,23 @@ def notify_visualization(url: str, payload: dict):
         pass
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--host", default=os.getenv("MQTT_HOST", "localhost"))
+    parser.add_argument("--port", type=int, default=int(os.getenv("MQTT_PORT", "1883")))
+    parser.add_argument("--database", default=os.getenv("REGISTRY_DB", "registry.db"))
+    parser.add_argument(
+        "--visualization-url",
+        default=os.getenv("CE_VISUALIZATION_URL", "http://localhost:5000"),
+    )
+    return parser.parse_args()
+
+
 def main():
-    host, port = os.getenv("MQTT_HOST", "localhost"), int(os.getenv("MQTT_PORT", "1883"))
-    store = RegistryStore(os.getenv("REGISTRY_DB", "registry.db"))
-    visualization = os.getenv("CE_VISUALIZATION_URL", "http://localhost:5000")
+    args = parse_args()
+    host, port = args.host, args.port
+    store = RegistryStore(args.database)
+    visualization = args.visualization_url
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 
     def on_connect(client, _userdata, _flags, reason_code, _properties):

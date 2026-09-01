@@ -1,148 +1,52 @@
 # Mobile Data Collector
 
-An Android camera/audio collector and a laptop-side MQTT complex-event detector.
-The two components can run together on one local network; MQTT is the only
-service between them.
-
-## How the pieces connect
+This system detects complex events from camera and microphone observations
+produced by Android phones. Each phone runs YOLO and YAMNet locally and publishes
+its detection results over MQTT. A laptop-side detector parses and compiles one
+YAML complex-event (CE) definition, consumes those observations, and reports CE
+progress to a web visualization.
 
 ```text
-Android phone  -- detection results -->  MQTT broker  -->  detector.py
-Android phone  <-- start/stop commands -- MQTT broker  <--  controller.py
+Android phones ── observations ──> MQTT ──> detector process
+Android phones <── start/stop ──── MQTT <── controller (optional)
+                                      │
+                                      └────> visualization
 ```
 
-The laptop can run the broker, detector, and controller. The phone and laptop
-must be on the same LAN and the laptop firewall must allow inbound TCP port
-1883. Do not expose the development broker to the public internet.
+Docker runs the long-lived MQTT broker, device registry, and visualization. The
+detector is a separate Python process, so each invocation can run a different
+CE without rebuilding or restarting the Docker services.
 
-## Quick start (physical phone)
+## Repository layout
 
-1. On the laptop, find its LAN IP address (for example, `192.168.1.25`). The
-   phone and laptop must be connected to the same Wi-Fi/LAN.
-2. From the repository root, start the complete laptop-side stack:
-
-   ```bash
-   docker compose up --build
-   ```
-
-   This starts Mosquitto on port 1883, the device registry, the complex-event
-   detector, and the web visualization on port 5000.
-3. Open <http://localhost:5000> on the laptop.
-4. Install the Android app once using Android Studio, or with USB debugging:
-
-   ```bash
-   cd android-app
-   ./gradlew installDebug
-   ```
-
-5. On the phone, grant camera and microphone permissions. Open **Settings** in
-   the app, enter the laptop's LAN IP and port `1883`, and save. Do not enter
-   `localhost`: on the phone that means the phone itself.
-6. Leave the device ID blank for automatic assignment, or enter a short name.
-   Return to the main screen and wait for `mqtt: on`.
-7. Press **toggle record**. Camera and audio detections should appear on the
-   visualization page. Press the button again to stop.
-
-To confirm the laptop services are healthy and watch detector/registry output:
-
-```bash
-docker compose ps
-docker compose logs -f detector registry mqtt
+```text
+android-app/             Android camera/audio collector
+ce_definitions/          YAML complex-event definitions
+event-detector/
+  language/              YAML parser and compiler
+  runtime/               observation model, FSM, and detector
+  services/              device registry and visualization
+  tools/                 recording controller and simulator
+mosquitto.conf            development MQTT configuration
+docker-compose.yml        persistent laptop services
 ```
 
-The default Docker event is `car_gunshot_person`, using `phone-1` for all three
-steps. It waits for a car, then a gunshot, then a person. Once completed, the
-detector stays completed; restart the detector container to start a fresh
-instance:
+## Requirements
 
-```bash
-docker compose restart detector
-```
+- A laptop with Docker Compose and Python 3
+- Android 8.0/API 26 or newer phones
+- Android Studio or Android SDK tools and JDK 17 if building the APK
+- The laptop and phones on the same LAN
+- Inbound TCP ports `1883` (MQTT) and `5000` (visualization) allowed by the
+  laptop firewall
 
-To select another event or device roles, copy `.env.example` to `.env`, edit
-the `CE_*` values, then restart the stack. For a single-phone
-`car_gunshot_person` test, set both role IDs to that phone's assigned ID.
+The included Mosquitto configuration is unauthenticated and unencrypted. It is
+intended only for a trusted development LAN and should not be exposed to the
+internet.
 
-## 1. Run an MQTT broker on the laptop
+## One-time setup
 
-The easiest deployment starts the broker, device registry, visualization, and
-detector together:
-
-```bash
-docker compose up --build
-```
-
-Open <http://localhost:5000>. Set `CE_EVENT`, `CE_OUTSIDE_DEVICE`, and
-`CE_BUILDING_DEVICE` in a `.env` file to select another CE or device roles.
-Assigned device IDs persist in the `registry-data` volume.
-
-Install Mosquitto using your operating system's package manager. For a
-development-only broker reachable from other LAN devices, create a temporary
-configuration outside this repository:
-
-```conf
-listener 1883 0.0.0.0
-allow_anonymous true
-```
-
-Then start it with `mosquitto -c /path/to/mosquitto.conf -v`. Find the laptop's
-LAN address (for example `192.168.1.25`); do not use `localhost` or `10.0.2.2`
-on a physical phone. `10.0.2.2` is only the Android emulator's alias for its
-host computer.
-
-## 2. Build and install the Android collector
-
-Requirements: Android Studio (or Android SDK command-line tools), JDK 17, and
-an Android 8.0/API 26 or newer device.
-
-Create `android-app/local.properties` through Android Studio, then build and
-install:
-
-```bash
-cd android-app
-./gradlew assembleDebug
-./gradlew installDebug
-```
-
-The generated APK is under `android-app/app/build/outputs/apk/` and is ignored
-by Git. Grant camera and microphone permissions when the app starts. The app
-uses unauthenticated, clear-text MQTT for local development; use TLS and broker
-authentication before using an untrusted network.
-
-After this one-time USB installation, the cable and `adb reverse` are not
-needed. Keep the phone and laptop on the same LAN, start the broker, detector,
-and visualization on the laptop, open the app, confirm it shows `mqtt: on`,
-then press **toggle record** to begin publishing. Press it again to stop.
-
-Use the app's **settings** button to enter the MQTT server IP/hostname and port.
-The values persist across restarts. A blank preferred device ID is assigned by
-the registry (`phone-1`, `phone-2`, ...); a requested name is used when it is
-available and made unique otherwise.
-
-The host and port entered in **Settings** are saved across app restarts. If
-DHCP changes the laptop's address, update it in the app; rebuilding is not
-required. `-PMQTT_HOST=192.168.1.25` can still set an optional build-time
-default for preconfigured APKs.
-
-Build properties and defaults are:
-
-```properties
-MQTT_HOST=
-MQTT_PORT=1883
-MQTT_PUBLISH_TOPIC=ucla/ce_mobile
-MQTT_CONTROL_TOPIC=ucla/ce_controller
-```
-
-The no-argument build intentionally leaves the server blank so the user enters
-it in Settings. For an emulator, use `10.0.2.2` as the host. Properties can
-also be placed in the user-level `~/.gradle/gradle.properties`. Do not commit
-credentials or `local.properties`.
-
-## 3. Run the laptop tools
-
-Docker Compose is the recommended path above. To run the Python services
-directly instead, first run a Mosquitto broker on port 1883, then create the
-project virtual environment once:
+### 1. Prepare the detector environment
 
 ```bash
 cd event-detector
@@ -151,64 +55,145 @@ python3 -m venv .venv
 pip install -r requirements.txt
 ```
 
-Start the visualization, registry, and detector in three activated terminals:
+### 2. Build and install the Android app
+
+Create `android-app/local.properties` using Android Studio, then build the APK:
 
 ```bash
-python visualization.py
-python registry.py
-python detector.py --host localhost --event car_gunshot_person \
-  --outside-device phone-1 --building-device phone-1
+cd android-app
+./gradlew assembleDebug
 ```
 
-Open <http://localhost:5000>. The registry automatically assigns stable phone
-IDs and reports them to the visualization. The detector sends status and MQTT
-observations to the same page. If the visualization is not running, detection
-continues normally. Set `CE_VISUALIZATION_URL` to an empty string or pass
-`--visualization-url ''` to disable updates.
+The resulting file is normally:
 
-### Test without a phone
+```text
+android-app/app/build/outputs/apk/debug/app-debug.apk
+```
 
-With Mosquitto, the visualization, and the detector running, publish a complete
-test sequence from a third activated terminal:
+The APK is a generated, Git-ignored artifact and may not exist in a fresh clone
+until it is built. Tagged GitHub versions build it automatically and attach it
+as `app-debug.apk` on the project's
+[Releases page](https://github.com/nesl/mobile_data_collector/releases). A
+manually dispatched **Build Android APK** workflow also provides it as a GitHub
+Actions artifact. Install it using either method:
+
+- Copy `app-debug.apk` to the phone using USB, file sharing, or cloud storage;
+  open it on the phone and permit installation from that source when prompted.
+- Enable USB debugging and install directly from the repository root:
+
+  ```bash
+  adb install -r android-app/app/build/outputs/apk/debug/app-debug.apk
+  ```
+
+Grant camera and microphone permissions when the app starts. Installation is a
+one-time operation unless the app changes.
+
+## Deploy and run a complex event
+
+### 1. Define the CE and its phones
+
+Create a YAML file under `ce_definitions/`. It names the complex event, declares
+the logical phone names, defines atomic-event triggers, and describes the CE
+sequence and temporal constraints.
+
+See the [CE language guide](event-detector/language/README.md) for the grammar,
+trigger fields, `AND`/`OR`, `within`, `holds`, and complete examples.
+
+The names under `devices` are deployment identities. For example, if a CE
+declares `outside_phone` and `building_phone`, decide which physical phone will
+have each name before placing the phones.
+
+### 2. Configure every phone
+
+Open **Settings** in the Android app and enter:
+
+- **MQTT server:** the laptop's LAN IP, such as `192.168.1.25`
+- **MQTT port:** `1883`
+- **Device ID:** the exact logical phone name declared in the CE YAML
+
+Do not use `localhost` on a physical phone; it refers to the phone itself. Each
+connected phone must use a unique device ID. Return to the main screen and wait
+for `mqtt: on`.
+
+### 3. Start the persistent services
+
+From the repository root:
 
 ```bash
-python simulate_event.py --event iobt_ce3 \
-  --outside-device phone-1 --building-device phone-2
+docker compose up --build
 ```
 
-The detector should print the observations and a completed `iobt_ce3` event.
-The webpage badge should turn green, both devices should appear, the graph
-should advance, and the MQTT message count should increase. Use the same event
-and device arguments for the detector and simulator.
+This starts MQTT, the device registry, and the visualization. Open
+<http://localhost:5000> on the laptop. These services can remain running across
+multiple CE runs.
 
-Complex-event definitions are separate modules under `event-detector/definitions`.
-For example, run the car → gunshot → person event with:
+Useful checks are:
 
 ```bash
-python detector.py --event car_gunshot_person \
-  --outside-device phone-1 --building-device phone-2
+docker compose ps
+docker compose logs -f registry mqtt
 ```
 
-One detector process represents one complex-event instance. After an event
-completes it remains completed and does not rearm; restart `detector.py` to
-begin a new incomplete instance.
+### 4. Start one CE detector
 
-In a second activated terminal, start a named recording session:
+In another terminal:
 
 ```bash
 cd event-detector
-python controller.py start --host localhost --session demo
-# Later:
-python controller.py stop --host localhost
+. .venv/bin/activate
+python -m runtime.detector ../ce_definitions/iobt_ce3.yaml
 ```
 
-The phone records video locally and publishes bundled camera/audio labels to
-`ucla/ce_mobile`. The detector evaluates the selected complex event using the
-timestamps in those bundles. Available events are `car_gunshot_person`,
-`gunshot`, `iobt_ce1`, `iobt_ce2`, and `iobt_ce3`. The IoBT events use device
-roles instead of fixed node names; the first two currently use YOLO vehicle
-classes without the original color requirements. Environment equivalents are
-listed in `.env.example`; `.env` files are ignored.
+The detector parses, validates, and compiles the supplied YAML before connecting
+to MQTT. A malformed definition or unsupported trigger fails immediately; no
+separate definition-check command is required.
+
+One detector process represents one CE instance. After completion, stop it with
+Ctrl-C and run the command again—with the same or another YAML file—to start a
+fresh instance. The Docker services do not need to be restarted.
+
+### 5. Begin collecting observations
+
+Press **toggle record** on each participating phone. Recording enables the phone
+to publish its YOLO and YAMNet observations; the already-running detector uses
+them to advance the CE. Press the button again to stop.
+
+Alternatively, start and stop all connected phones from the laptop:
+
+```bash
+cd event-detector
+python -m tools.controller start --host localhost --session demo
+python -m tools.controller stop --host localhost
+```
+
+## Test without phones
+
+With the Docker services and a matching detector running, publish a simulated
+observation sequence from another activated terminal:
+
+```bash
+cd event-detector
+python -m tools.simulate_event --event iobt_ce3
+```
+
+The detector should print the observations and completed CE, while the web page
+shows device observations and FSM progress.
+
+## Configuration notes
+
+The phone settings persist across app restarts. If DHCP changes the laptop's IP,
+update the MQTT server setting on every phone. Android build-time defaults are:
+
+```properties
+MQTT_HOST=
+MQTT_PORT=1883
+MQTT_PUBLISH_TOPIC=ucla/ce_mobile
+MQTT_CONTROL_TOPIC=ucla/ce_controller
+```
+
+For an Android emulator, use `10.0.2.2` to reach the host computer. The detector
+also accepts `--host`, `--port`, `--topic`, and `--visualization-url`; run
+`python -m runtime.detector --help` for the complete CLI.
 
 ## Tests
 
@@ -220,8 +205,5 @@ cd ../android-app
 ./gradlew test
 ```
 
-The Python tests do not require a broker. Android builds need dependency access
-the first time Gradle runs.
-
-### Note to self:
-https://www.youtube.com/watch?v=zJM7knkHRwc is a good gunshot example, but requires repeated replay, and the speaker type seems to matter.
+Python tests do not require an MQTT broker. Android builds may require network
+access the first time Gradle downloads dependencies.

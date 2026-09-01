@@ -1,0 +1,55 @@
+version: 1
+complex_event_name: iobt_ce3
+description: Vehicle arrival, building entry, gunshot, exit, and departure.
+
+devices:
+  OUTSIDE: outside_phone
+  BUILDING: building_phone
+
+atomic_events:
+  - atomic_event_name: vehicle_arrives
+    triggers:
+      - device: OUTSIDE
+        label: car
+
+  - atomic_event_name: person_outside
+    triggers:
+      - device: OUTSIDE
+        label: person
+
+  - atomic_event_name: person_enters
+    triggers:
+      - device: BUILDING
+        label: person
+
+  - atomic_event_name: gunshot
+    triggers:
+      - device: BUILDING
+        label: gunshot
+        confidence: ">= 0.05"
+
+  - atomic_event_name: person_leaves
+    triggers:
+      - device: OUTSIDE
+        label: person
+
+  - atomic_event_name: area_clear
+    device: OUTSIDE
+    triggers:
+      - label: person
+        count: "== 0"
+      - label: vehicle
+        count: "== 0"
+
+ce_sequence:
+  - vehicle_arrives
+  - person_outside
+  - person_enters
+  - gunshot
+  - person_leaves
+  - area_clear
+
+constraints:
+  - holds:
+      atomic_event: area_clear
+      duration: 4s

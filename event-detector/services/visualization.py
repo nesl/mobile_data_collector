@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Serve a small live dashboard for the mobile complex-event detector."""
+"""Serve the live dashboard for the mobile complex-event detector."""
 
 from __future__ import annotations
 

@@ -1,0 +1,16 @@
+version: 1
+complex_event_name: gunshot
+description: A gunshot is heard by the building phone.
+
+devices:
+  BUILDING: building_phone
+
+atomic_events:
+  - atomic_event_name: gunshot_heard
+    triggers:
+      - device: BUILDING
+        label: gunshot
+        confidence: ">= 0.05"
+
+ce_sequence:
+  - gunshot_heard

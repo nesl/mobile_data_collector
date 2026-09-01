@@ -1,0 +1,34 @@
+version: 1
+complex_event_name: iobt_ce1
+description: Four cars arrive, then a truck, then all vehicles leave.
+
+devices:
+  OUTSIDE: outside_phone
+
+atomic_events:
+  - atomic_event_name: four_cars_detected
+    triggers:
+      - device: OUTSIDE
+        label: car
+        count: ">= 4"
+
+  - atomic_event_name: truck_detected
+    triggers:
+      - device: OUTSIDE
+        label: truck
+
+  - atomic_event_name: vehicles_gone
+    triggers:
+      - device: OUTSIDE
+        label: vehicle
+        count: "== 0"
+
+ce_sequence:
+  - four_cars_detected
+  - truck_detected
+  - vehicles_gone
+
+constraints:
+  - holds:
+      atomic_event: vehicles_gone
+      duration: 4s

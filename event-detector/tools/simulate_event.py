@@ -7,6 +7,8 @@ import time
 
 import paho.mqtt.client as mqtt
 
+from language import event_names, load_catalog, load_event
+
 
 def vision(device, timestamp, *labels):
     return device, {"dev_id": device, "detectionResults": [{
@@ -22,8 +24,10 @@ def audio(device, timestamp, label):
     }]}
 
 
-def sequence(name, outside, building):
+def sequence(name, devices):
     now = time.time()
+    outside = devices.get("OUTSIDE", "outside_phone")
+    building = devices.get("BUILDING", "building_phone")
     if name == "gunshot":
         return [audio(building, now, "Gunshot, gunfire")]
     if name == "car_gunshot_person":
@@ -54,14 +58,13 @@ def main():
     parser.add_argument("--host", default="localhost")
     parser.add_argument("--port", type=int, default=1883)
     parser.add_argument("--topic", default="ucla/ce_mobile")
-    parser.add_argument("--event", choices=("gunshot", "iobt_ce1", "iobt_ce2", "iobt_ce3", "car_gunshot_person"), default="iobt_ce3")
-    parser.add_argument("--outside-device", default="phone-1")
-    parser.add_argument("--building-device", default="phone-2")
+    parser.add_argument("--event", choices=event_names(), default="iobt_ce3")
     args = parser.parse_args()
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     client.connect(args.host, args.port, 30)
     client.loop_start()
-    for device, body in sequence(args.event, args.outside_device, args.building_device):
+    definition = load_event(load_catalog()[args.event])
+    for device, body in sequence(args.event, definition.devices):
         client.publish(args.topic, "detection::" + json.dumps(body), qos=1).wait_for_publish()
         print(f"Published {args.event} observation from {device}")
         time.sleep(0.2)
